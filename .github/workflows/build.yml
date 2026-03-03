@@ -13,6 +13,9 @@ jobs:
     steps:
       - name: checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 2
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v5
       - name: validate gradle wrapper
@@ -22,10 +25,57 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
+
+
       - name: make gradle wrapper executable
         run: chmod +x ./gradlew
+
+        
+      - name: Restore DataGen cache
+        id: datagen-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: src/main/generated
+          key: datagen-${{ github.run_id }}
+          restore-keys:
+            datagen-
+
+
+
+      - name: Make decision
+        id: decision
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_run=true" >> $GITHUB_OUTPUT 
+            echo "Running datagen due to workflow_dispatch"
+          elif [ "${{ steps.datagen-restore.outputs.cache-hit }}" = "" ]; then
+            echo "should_run=true" >> $GITHUB_OUTPUT
+            echo "Running datagen due to cache miss"
+          elif git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep -q "^src/main/java/dev/amble/stargate/datagen/"; then
+            echo "should_run=true" >> $GITHUB_OUTPUT
+            echo "Running datagen due to datagen change"
+          else
+            # Don't run in all other cases
+            echo "should_run=false" >> $GITHUB_OUTPUT
+            echo "Skipping datagen (no source changes OR cache hit)"
+          fi
+
+      - name: Run DataGen
+        if: steps.decision.outputs.should_run == 'true'
+        run: ./gradlew --configuration-cache runDatagen
+
+      - name: Save DataGen cache
+        id: datagen-save
+        uses: actions/cache/save@v4
+        with:
+          path: src/main/generated
+          key: ${{ steps.datagen-restore.outputs.cache-primary-key }}
+        
+
+#      - name: Run Datagen
+#        run: ./gradlew runDatagen
       - name: build
-        run: ./gradlew build
+        run: ./gradlew --configuration-cache build
       - name: capture build artifacts
         uses: actions/upload-artifact@v4
         with:
